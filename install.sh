@@ -148,7 +148,7 @@ cd /usr/local/ || exit 1
 # use fixed tag version
 tag_version="v1.0.1"
 
-ZIP_FILE="x-ui-linux-${ARCH}.zip"
+ZIP_FILE="x-ui-linux-${ARCH}.tar.gz"
 TAR_FILE="x-ui-linux-${ARCH}.tar.gz"
 
 URL="https://github.com/cryptowergo/4x-ui/releases/download/${tag_version}/${ZIP_FILE}"
@@ -165,9 +165,9 @@ fi
 systemctl stop x-ui 2>/dev/null
 rm -rf /usr/local/x-ui/
 
-Распаковываем zip вместо tar.gz
-unzip x-ui-linux-${ARCH}.zip
-rm -f x-ui-linux-${ARCH}.zip
+# Распаковываем zip вместо tar.gz
+# unzip x-ui-linux-${ARCH}.zip
+# rm -f x-ui-linux-${ARCH}.zip
 
 tar -xzf x-ui-linux-${ARCH}.tar.gz
 rm -f x-ui-linux-${ARCH}.tar.gz
