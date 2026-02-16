@@ -144,15 +144,14 @@ esac
 # Установка x-ui
 cd /usr/local/ || exit 1
 
-# tag_version=$(curl -Ls "https://api.github.com/repos/zikwall/3x-ui/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+# tag_version=$(curl -Ls "https://api.github.com/repos/cryptowergo/4x-ui/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 # use fixed tag version
-tag_version="v1.0.10"
+tag_version="v1.0.1"
 
 ZIP_FILE="x-ui-linux-${ARCH}.zip"
 TAR_FILE="x-ui-linux-${ARCH}.tar.gz"
 
-URL="https://github.com/zikwall/3x-ui/releases/download/${tag_version}/${ZIP_FILE}"
-
+URL="https://github.com/cryptowergo/4x-ui/releases/download/${tag_version}/${ZIP_FILE}"
 
 echo "Скачиваем ${URL}..."
 
@@ -178,17 +177,14 @@ chmod +x x-ui
 [[ "$ARCH" == armv* ]] && mv bin/xray-linux-${ARCH} bin/xray-linux-arm && chmod +x bin/xray-linux-arm
 chmod +x x-ui bin/xray-linux-${ARCH}
 cp -f x-ui.service.debian /etc/systemd/system/x-ui.service
-URL1="https://raw.githubusercontent.com/zikwall/3x-ui/main/x-ui.sh"
-URL2="https://files.yukikras.net/3x-ui/x-ui.sh"
+
+URL1="https://raw.githubusercontent.com/cryptowergo/4x-ui/main/x-ui.sh"
 FILE="/usr/bin/x-ui"
 
 if ! wget -q -O "$FILE" "$URL1"; then
     echo "Не удалось скачать с GitHub, пробую зеркало..."
-    wget -q -O "$FILE" "$URL2" || {
-        echo "Ошибка: не удалось скачать файл ни с одного источника"
-        exit 1
-    }
 fi
+
 chmod +x /usr/local/x-ui/x-ui.sh /usr/bin/x-ui
 
 # -----------------------------
@@ -618,9 +614,6 @@ if echo "$ADD_RESULT" | grep -q '"success":true'; then
     echo -e ""
     qrencode -t ANSIUTF8 "$VLESS_LINK"
     echo -e ""
-    echo -e "С инструкцией по созданию дополнительных Vless ключей вы можете ознакомиться тут: https://wiki.yukikras.net/ru/razvertyvanie-proksi-protokola-vless-s-pomoshyu-3x-ui#как-добавлять-новых-клиентов"
-    echo -e ""
-    echo -e "Если у вас не открывается 3x-ui панель, попробуйте, пожалуйста её открыть следуя этой инструкции: https://github.com/YukiKras/wiki/blob/main/ssh-tunnels.md"
 
     {
     echo "Ваш VPN ключ, его можно использовать сразу на нескольких устройствах:"
@@ -631,9 +624,6 @@ if echo "$ADD_RESULT" | grep -q '"success":true'; then
     echo ""
     qrencode -t ANSIUTF8 "$VLESS_LINK"
     echo ""
-    echo "С инструкцией по созданию дополнительных Vless ключей вы можете ознакомиться тут: https://wiki.yukikras.net/ru/razvertyvanie-proksi-protokola-vless-s-pomoshyu-3x-ui#как-добавлять-новых-клиентов"
-    echo ""
-    echo -e "Если у вас не открывается 3x-ui панель, попробуйте, пожалуйста её открыть следуя этой инструкции: https://github.com/YukiKras/wiki/blob/main/ssh-tunnels.md"
     } >> /root/3x-ui.txt
 else
     echo -e "${red}Ошибка при добавлении инбаунда через API:${plain}" >&3
@@ -648,9 +638,6 @@ echo -e "Адрес панели: \033[1;36mhttp://${SERVER_IP}:${PORT}/${WEBPAT
 echo -e "Логин:        \033[1;33m${USERNAME}\033[0m" >&3
 echo -e "Пароль:       \033[1;33m${PASSWORD}\033[0m" >&3
 
-echo -e "\nИнструкции по настройке VPN приложений вы сможете найти здесь:" >&3
-echo -e "\033[1;34mhttps://github.com/YukiKras/wiki/blob/main/nastroikavpn.md\033[0m" >&3
-
 echo -e "\nВсе данные сохранены в файл: \033[1;36m/root/3x-ui.txt\033[0m" >&3
 echo -e "Для повторного просмотра информации используйте команду:" >&3
 echo -e "" >&3
@@ -663,6 +650,4 @@ echo -e "" >&3
   echo "Логин:         ${USERNAME}"
   echo "Пароль:        ${PASSWORD}"
   echo ""
-  echo "Инструкции по настройке VPN приложений:"
-  echo "https://github.com/YukiKras/wiki/blob/main/nastroikavpn.md"
 } >> /root/3x-ui.txt
