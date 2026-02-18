@@ -257,9 +257,95 @@ GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $DB_USER;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO $DB_USER;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO $DB_USER;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO $DB_USER;
+
+# -----------------------------
+# 4️⃣ Создаём таблицы и индексы
+# -----------------------------
+sudo -u postgres psql <<EOF
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
+
+-- Create a simple health check function
+CREATE OR REPLACE FUNCTION health_check()
+RETURNS TEXT AS \$\$
+BEGIN
+    RETURN 'OK - ' || current_timestamp;
+END;
+\$\$ LANGUAGE plpgsql;
+
+DO \$\$
+BEGIN
+    RAISE NOTICE '3X-UI PostgreSQL database initialized successfully at %', current_timestamp;
+END \$\$;
+
+DROP DATABASE IF EXISTS $DB_NAME;
+DROP USER IF EXISTS $DB_USER;
+
+CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASSWORD';
+CREATE DATABASE $DB_NAME OWNER $DB_USER;
+
+\c $DB_NAME
+
+ALTER SCHEMA public OWNER TO $DB_USER;
+GRANT ALL PRIVILEGES ON SCHEMA public TO $DB_USER;
+
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $DB_USER;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $DB_USER;
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $DB_USER;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO $DB_USER;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO $DB_USER;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO $DB_USER;
+
+-- =============================
+-- v2ray_clients table + indexes
+-- =============================
+
+CREATE TABLE IF NOT EXISTS public.v2ray_clients
+(
+    id         bigserial PRIMARY KEY,
+    device_id  varchar(255)            NOT NULL,
+    server_ip  inet                    NOT NULL,
+    inbound_id integer                 NOT NULL,
+    uuid       uuid                    NOT NULL,
+    email      varchar(255)            NOT NULL,
+    enabled    boolean   DEFAULT true  NOT NULL,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL,
+    revoked_at timestamp,
+    expires_at timestamp DEFAULT now() NOT NULL
+);
+
+-- Делать владельцем основного DB юзера (обычно это же $DB_USER)
+ALTER TABLE public.v2ray_clients OWNER TO $DB_USER;
+
+-- Уникальный активный device+server (частичный индекс)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_v2ray_clients_active_device_server
+    ON public.v2ray_clients (device_id, server_ip)
+    WHERE (enabled = true AND revoked_at IS NULL);
+
+-- Уникальность server+inbound+uuid
+CREATE UNIQUE INDEX IF NOT EXISTS uq_v2ray_clients_server_inbound_uuid
+    ON public.v2ray_clients (server_ip, inbound_id, uuid);
+
+-- Обычные индексы
+CREATE INDEX IF NOT EXISTS idx_v2ray_clients_device_id
+    ON public.v2ray_clients (device_id);
+
+CREATE INDEX IF NOT EXISTS idx_v2ray_clients_server_ip
+    ON public.v2ray_clients (server_ip);
+
+CREATE INDEX IF NOT EXISTS idx_v2ray_clients_enabled
+    ON public.v2ray_clients (enabled);
+
+CREATE INDEX IF NOT EXISTS idx_v2ray_clients_revoked_at
+    ON public.v2ray_clients (revoked_at);
+
+CREATE INDEX IF NOT EXISTS idx_v2ray_clients_expires_at
+    ON public.v2ray_clients (expires_at);
 EOF
 
-echo "Старая база и пользователь удалены, новая создана."
+echo "База пересоздана, таблица v2ray_clients и индексы созданы."
 
 # -----------------------------
 # 4️⃣ Создаём env для x-ui
