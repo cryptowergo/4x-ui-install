@@ -297,38 +297,38 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO $DB_USER;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO $DB_USER;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO $DB_USER;
 
--- =============================
--- v2ray_clients table + indexes
+ -- =============================
+-- v2ray_clients table + indexes ( актуальная схема )
 -- =============================
 
 CREATE TABLE IF NOT EXISTS public.v2ray_clients
 (
-    id         bigserial PRIMARY KEY,
-    device_id  varchar(255)            NOT NULL,
-    server_ip  inet                    NOT NULL,
-    inbound_id integer                 NOT NULL,
-    uuid       uuid                    NOT NULL,
-    email      varchar(255)            NOT NULL,
-    enabled    boolean   DEFAULT true  NOT NULL,
-    created_at timestamp DEFAULT now() NOT NULL,
-    updated_at timestamp DEFAULT now() NOT NULL,
-    revoked_at timestamp,
-    expires_at timestamp DEFAULT now() NOT NULL
+    id                bigserial PRIMARY KEY,
+    device_id         varchar(255)                            NOT NULL,
+    server_ip         inet                                    NOT NULL,
+    inbound_id        integer                                 NOT NULL,
+    uuid              uuid                                    NOT NULL,
+    email             varchar(255)                            NOT NULL,
+    enabled           boolean                   DEFAULT true   NOT NULL,
+    created_at        timestamp with time zone  DEFAULT now()  NOT NULL,
+    updated_at        timestamp with time zone  DEFAULT now()  NOT NULL,
+    revoked_at        timestamp,
+    expires_at        timestamp with time zone  DEFAULT now()  NOT NULL,
+    cleanup_failed_at timestamp with time zone,
+    expiry_time       bigint                                  NOT NULL
 );
 
--- Делать владельцем основного DB юзера (обычно это же $DB_USER)
+-- owner (если хочешь держать владельца = DB_USER)
 ALTER TABLE public.v2ray_clients OWNER TO $DB_USER;
 
--- Уникальный активный device+server (частичный индекс)
+-- Индексы / уникальности
 CREATE UNIQUE INDEX IF NOT EXISTS uq_v2ray_clients_active_device_server
     ON public.v2ray_clients (device_id, server_ip)
     WHERE (enabled = true AND revoked_at IS NULL);
 
--- Уникальность server+inbound+uuid
 CREATE UNIQUE INDEX IF NOT EXISTS uq_v2ray_clients_server_inbound_uuid
     ON public.v2ray_clients (server_ip, inbound_id, uuid);
 
--- Обычные индексы
 CREATE INDEX IF NOT EXISTS idx_v2ray_clients_device_id
     ON public.v2ray_clients (device_id);
 
@@ -343,6 +343,14 @@ CREATE INDEX IF NOT EXISTS idx_v2ray_clients_revoked_at
 
 CREATE INDEX IF NOT EXISTS idx_v2ray_clients_expires_at
     ON public.v2ray_clients (expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_v2ray_clients_cleanup_failed_at
+    ON public.v2ray_clients (cleanup_failed_at)
+    WHERE (cleanup_failed_at IS NOT NULL);
+
+CREATE INDEX IF NOT EXISTS idx_v2ray_clients_expiry_time_active
+    ON public.v2ray_clients (expiry_time)
+    WHERE (revoked_at IS NULL);
 EOF
 
 echo "База пересоздана, таблица v2ray_clients и индексы созданы."
