@@ -430,11 +430,7 @@ EOF
 chmod 600 /etc/x-ui/db.env
 echo "Env-файл для x-ui создан: /etc/x-ui/db.env"
 
-# только env
-if [[ -f /etc/x-ui/db.env ]]; then
-  chown root:xray /etc/x-ui/db.env
-  chmod 0640 /etc/x-ui/db.env
-fi
+fix_xray_permissions "$XRAY_USER"
 
 # Настройка
 echo "USERNAME=$USERNAME"
@@ -491,6 +487,8 @@ echo "Миграция и оптимизация базы данных заве�
 systemctl daemon-reload >>"$LOG_FILE" 2>&1
 systemctl enable x-ui >>"$LOG_FILE" 2>&1
 systemctl start x-ui >>"$LOG_FILE" 2>&1
+
+fix_xray_permissions "$XRAY_USER"
 
 # Генерация Reality ключей
 KEYS=$(/usr/local/x-ui/bin/xray-linux-${ARCH} x25519)
@@ -808,3 +806,5 @@ echo -e "" >&3
   echo "Пароль:        ${PASSWORD}"
   echo ""
 } >> /root/3x-ui.txt
+
+fix_xray_permissions "$XRAY_USER"
