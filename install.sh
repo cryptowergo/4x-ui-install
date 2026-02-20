@@ -204,24 +204,45 @@ fi
 XRAY_UID="$(id -u "$XRAY_USER")"
 echo "[*] $XRAY_USER uid: $XRAY_UID"
 
-# ensure xray can write x-ui generated config
-chown -R "$XRAY_USER:$XRAY_USER" /usr/local/x-ui/bin
+fix_xray_permissions() {
+  local u="$1"
 
-# x-ui генерит конфиг сюда
-install -d -m 0750 -o xray -g xray /usr/local/x-ui/bin
-chown -R xray:xray /usr/local/x-ui/bin
-chmod 0750 /usr/local/x-ui/bin
+  # 1) /usr/local/x-ui/bin must be writable for generated config
+  install -d -m 0750 -o "$u" -g "$u" /usr/local/x-ui/bin
 
-# Папка /etc/x-ui: root владелец, группа xray, доступ 750
-chown root:xray /etc/x-ui
-chmod 0750 /etc/x-ui
+  # config.json is generated/overwritten by root during install/update -> force owner every time
+  touch /usr/local/x-ui/bin/config.json
+  chown "$u:$u" /usr/local/x-ui/bin/config.json
+  chmod 0640 /usr/local/x-ui/bin/config.json
 
-# если в /etc/x-ui есть *.db/*.sqlite — отдать xray (аккуратно)
-for f in /etc/x-ui/*.db /etc/x-ui/*.sqlite; do
-  [[ -f "$f" ]] || continue
-  chown xray:xray "$f"
-  chmod 0640 "$f"
-done
+  # xray binary must be executable
+  chmod +x /usr/local/x-ui/x-ui 2>/dev/null || true
+  chmod +x /usr/local/x-ui/bin/xray-linux-* 2>/dev/null || true
+
+  # 2) /etc/x-ui should be accessible (db/env)
+  install -d -m 0750 -o root -g "$u" /etc/x-ui
+
+  # db.env readable by xray, writable only by root
+  if [[ -f /etc/x-ui/db.env ]]; then
+    chown root:"$u" /etc/x-ui/db.env
+    chmod 0640 /etc/x-ui/db.env
+  fi
+
+  # sqlite/db files must be writable by xray if panel uses them
+  for f in /etc/x-ui/*.db /etc/x-ui/*.sqlite; do
+    [[ -f "$f" ]] || continue
+    chown "$u:$u" "$f"
+    chmod 0640 "$f"
+  done
+
+  # 3) logs: xray wants /var/log/xray/access.log etc
+  install -d -m 0750 -o "$u" -g "$u" /var/log/xray
+  touch /var/log/xray/access.log /var/log/xray/error.log
+  chown "$u:$u" /var/log/xray/access.log /var/log/xray/error.log
+  chmod 0640 /var/log/xray/access.log /var/log/xray/error.log
+}
+
+fix_xray_permissions "$XRAY_USER"
 
 # -----------------------------
 # 1️⃣ Устанавливаем PostgreSQL
