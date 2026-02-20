@@ -473,36 +473,51 @@ echo "Изменяем тип полей settings и stream_settings с text н�
 
 # Подключаемся к базе и изменяем типы полей
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$DB_NAME" <<SQL
--- Изменяем тип поля settings с text на jsonb
-ALTER TABLE inbounds 
-ALTER COLUMN settings TYPE jsonb 
-USING settings::jsonb;
+-- 0) helper: safe text->jsonb
+CREATE OR REPLACE FUNCTION public.try_jsonb(t text)
+RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+AS \$\$
+BEGIN
+  RETURN t::jsonb;
+EXCEPTION WHEN others THEN
+  RETURN '{}'::jsonb;
+END;
+\$\$;
 
--- Изменяем тип поля stream_settings с text на jsonb
-ALTER TABLE inbounds 
-ALTER COLUMN stream_settings TYPE jsonb 
-USING stream_settings::jsonb;
+-- 1) settings -> jsonb (safe)
+ALTER TABLE public.inbounds
+  ALTER COLUMN settings TYPE jsonb
+  USING public.try_jsonb(NULLIF(btrim(settings), ''));
 
-ALTER TABLE inbounds
+-- 2) stream_settings -> jsonb (safe)
+ALTER TABLE public.inbounds
+  ALTER COLUMN stream_settings TYPE jsonb
+  USING public.try_jsonb(NULLIF(btrim(stream_settings), ''));
+
+-- 3) sniffing -> jsonb (safe)
+ALTER TABLE public.inbounds
   ALTER COLUMN sniffing TYPE jsonb
-  USING CASE
-    WHEN sniffing IS NULL OR sniffing = '' THEN '{}'::jsonb
-    ELSE sniffing::jsonb
-  END;
-  
--- Создаем индексы для оптимизации JSON запросов
-CREATE INDEX IF NOT EXISTS idx_inbounds_settings_clients ON inbounds USING gin ((settings->'clients'));
-CREATE INDEX IF NOT EXISTS idx_inbounds_stream_settings_security ON inbounds ((stream_settings->>'security')) WHERE stream_settings->>'security' IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_inbounds_protocol ON inbounds(protocol);
+  USING public.try_jsonb(NULLIF(btrim(sniffing), ''));
 
--- Проверяем результат
-SELECT 
-    column_name, 
-    data_type 
-FROM information_schema.columns 
-WHERE table_name = 'inbounds' 
-  AND column_name IN ('settings', 'stream_settings');
-EOF
+-- индексы
+CREATE INDEX IF NOT EXISTS idx_inbounds_settings_clients
+  ON public.inbounds USING gin ((settings->'clients'));
+
+CREATE INDEX IF NOT EXISTS idx_inbounds_stream_settings_security
+  ON public.inbounds ((stream_settings->>'security'))
+  WHERE stream_settings->>'security' IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_inbounds_protocol
+  ON public.inbounds(protocol);
+
+-- проверка
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'inbounds'
+  AND column_name IN ('settings','stream_settings','sniffing');
+SQL
 
 echo "Миграция и оптимизация базы данных завершены"
 
