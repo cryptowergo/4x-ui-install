@@ -373,6 +373,12 @@ EOF
 chmod 600 /etc/x-ui/db.env
 echo "Env-файл для x-ui создан: /etc/x-ui/db.env"
 
+# только env
+if [[ -f /etc/x-ui/db.env ]]; then
+  chown root:xray /etc/x-ui/db.env
+  chmod 0640 /etc/x-ui/db.env
+fi
+
 # Настройка
 echo "USERNAME=$USERNAME"
 echo "PASSWORD=$PASSWORD"
