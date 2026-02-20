@@ -187,6 +187,42 @@ fi
 
 chmod +x /usr/local/x-ui/x-ui.sh /usr/bin/x-ui
 
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "[!] Missing: $1"; exit 1; }; }
+need_cmd install
+need_cmd id
+
+XRAY_USER="xray"
+
+# ============================================================
+# 0) ENSURE XRAY USER EXISTS
+# ============================================================
+if ! id -u "$XRAY_USER" >/dev/null 2>&1; then
+  echo "[*] Creating system user: $XRAY_USER"
+  useradd --system --no-create-home --shell /usr/sbin/nologin "$XRAY_USER"
+fi
+
+XRAY_UID="$(id -u "$XRAY_USER")"
+echo "[*] $XRAY_USER uid: $XRAY_UID"
+
+# ensure xray can write x-ui generated config
+chown -R "$XRAY_USER:$XRAY_USER" /usr/local/x-ui/bin
+
+# x-ui генерит конфиг сюда
+install -d -m 0750 -o xray -g xray /usr/local/x-ui/bin
+chown -R xray:xray /usr/local/x-ui/bin
+chmod 0750 /usr/local/x-ui/bin
+
+# Папка /etc/x-ui: root владелец, группа xray, доступ 750
+chown root:xray /etc/x-ui
+chmod 0750 /etc/x-ui
+
+# если в /etc/x-ui есть *.db/*.sqlite — отдать xray (аккуратно)
+for f in /etc/x-ui/*.db /etc/x-ui/*.sqlite; do
+  [[ -f "$f" ]] || continue
+  chown xray:xray "$f"
+  chmod 0640 "$f"
+done
+
 # -----------------------------
 # 1️⃣ Устанавливаем PostgreSQL
 # -----------------------------
