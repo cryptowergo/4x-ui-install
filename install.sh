@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Проверка root
+if [[ $EUID -ne 0 ]]; then
+  echo "Ошибка: скрипт нужно запускать от root" >&2
+  exit 1
+fi
+
 INSTALL_WARP=false
 EXTENDED_SETUP=false
 
@@ -14,7 +20,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
-            echo "Неизвестный аргумент: $1" >&3
+            echo "Неизвестный аргумент: $1" >&2
             exit 1
             ;;
     esac
@@ -83,12 +89,6 @@ gen_random_string() {
 USERNAME=$(gen_random_string 10)
 PASSWORD=$(gen_random_string 10)
 WEBPATH=$(gen_random_string 18)
-
-# Проверка root
-if [[ $EUID -ne 0 ]]; then
-    echo -e "${red}Ошибка:${plain} скрипт нужно запускать от root" >&3
-    exit 1
-fi
 
 # Определение ОС
 if [[ -f /etc/os-release ]]; then
@@ -268,96 +268,107 @@ echo "DB_PASSWORD=$DB_PASSWORD" >> /root/3x-db.txt
 chmod 600 /root/3x-db.txt
 echo "Данные для доступа к БД сохранены в /root/3x-db.txt"
 
+ensure_postgres_running() {
+  echo "[*] Ensuring PostgreSQL is installed & running..."
+
+  # install (idempotent)
+  if ! command -v psql >/dev/null 2>&1; then
+    apt-get update -y
+    DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql postgresql-contrib
+  fi
+
+  # enable/start the real cluster unit (Ubuntu way)
+  # 1) if cluster exists: start it
+  if command -v pg_lsclusters >/dev/null 2>&1; then
+    # start all clusters that are down (safe)
+    while read -r ver name port status owner datadir log; do
+      [[ "$ver" == "Ver" ]] && continue
+      if [[ "$status" != "online" ]]; then
+        echo "[*] Starting cluster: ${ver} ${name}"
+        pg_ctlcluster "$ver" "$name" start || true
+      fi
+    done < <(pg_lsclusters | awk '{print $1, $2, $3, $4, $5, $6, $7}')
+  fi
+
+  # 2) enable systemd units (idempotent)
+  systemctl enable --now postgresql >/dev/null 2>&1 || true
+  # prefer конкретный юнит 16-main если существует
+  if systemctl list-unit-files | grep -q '^postgresql@16-main\.service'; then
+    systemctl enable --now postgresql@16-main >/dev/null 2>&1 || true
+  fi
+
+  # 3) wait until ready
+  # pg_isready is best; fallback to socket existence / ss
+  if command -v pg_isready >/dev/null 2>&1; then
+    for i in {1..30}; do
+      if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+        echo "[*] PostgreSQL is ready on 127.0.0.1:5432"
+        return 0
+      fi
+      sleep 1
+    done
+    echo "[!] PostgreSQL not ready after 30s" >&2
+    systemctl status postgresql --no-pager || true
+    systemctl status postgresql@16-main --no-pager || true
+    exit 1
+  else
+    # fallback
+    for i in {1..30}; do
+      ss -lntp 2>/dev/null | grep -q ':5432' && return 0
+      sleep 1
+    done
+    echo "[!] PostgreSQL not listening on 5432 after 30s" >&2
+    exit 1
+  fi
+}
+
+ensure_postgres_running
+
 # -----------------------------
 # 3️⃣ Удаляем старые базы и пользователей с таким именем
 # -----------------------------
-sudo -u postgres psql <<EOF
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
+echo "[*] Recreating DB/user..."
 
--- Create a simple health check function
-CREATE OR REPLACE FUNCTION health_check()
-RETURNS TEXT AS $$
-BEGIN
-    RETURN 'OK - ' || current_timestamp;
-END;
-$$ LANGUAGE plpgsql;
-
--- Log initialization completion
-DO $$
-BEGIN
-    RAISE NOTICE '3X-UI PostgreSQL database initialized successfully at %', current_timestamp;
-END $$;
-
--- Удаляем старую базу и пользователя
-DROP DATABASE IF EXISTS $DB_NAME;
-DROP USER IF EXISTS $DB_USER;
-
--- Создаём нового пользователя
-CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASSWORD';
-
--- Создаём новую базу и назначаем владельцем пользователя
-CREATE DATABASE $DB_NAME OWNER $DB_USER;
-
--- Назначаем права на схему public
-\c $DB_NAME
-ALTER SCHEMA public OWNER TO $DB_USER;
-GRANT ALL PRIVILEGES ON SCHEMA public TO $DB_USER;
-
-
--- Grant additional permissions to the user
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $DB_USER;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $DB_USER;
-GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $DB_USER;
-
--- Set default privileges for future objects
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO $DB_USER;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO $DB_USER;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO $DB_USER;
-
-# -----------------------------
-# 4️⃣ Создаём таблицы и индексы
-# -----------------------------
-sudo -u postgres psql <<EOF
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
-
--- Create a simple health check function
-CREATE OR REPLACE FUNCTION health_check()
-RETURNS TEXT AS \$\$
-BEGIN
-    RETURN 'OK - ' || current_timestamp;
-END;
-\$\$ LANGUAGE plpgsql;
-
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
 DO \$\$
 BEGIN
-    RAISE NOTICE '3X-UI PostgreSQL database initialized successfully at %', current_timestamp;
-END \$\$;
+  -- terminate connections if DB exists
+  PERFORM pg_terminate_backend(pid)
+  FROM pg_stat_activity
+  WHERE datname = '${DB_NAME}' AND pid <> pg_backend_pid();
+EXCEPTION WHEN undefined_table THEN
+  NULL;
+END
+\$\$;
 
-DROP DATABASE IF EXISTS $DB_NAME;
-DROP USER IF EXISTS $DB_USER;
+DROP DATABASE IF EXISTS "${DB_NAME}";
+DROP ROLE IF EXISTS "${DB_USER}";
 
-CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASSWORD';
-CREATE DATABASE $DB_NAME OWNER $DB_USER;
+CREATE ROLE "${DB_USER}" LOGIN PASSWORD '${DB_PASSWORD}';
+CREATE DATABASE "${DB_NAME}" OWNER "${DB_USER}";
 
-\c $DB_NAME
+\c "${DB_NAME}"
 
-ALTER SCHEMA public OWNER TO $DB_USER;
-GRANT ALL PRIVILEGES ON SCHEMA public TO $DB_USER;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
 
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $DB_USER;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $DB_USER;
-GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $DB_USER;
+ALTER SCHEMA public OWNER TO "${DB_USER}";
+GRANT ALL PRIVILEGES ON SCHEMA public TO "${DB_USER}";
 
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO $DB_USER;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO $DB_USER;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO $DB_USER;
+-- Grant additional permissions to the user
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "${DB_USER}";
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "${DB_USER}";
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO "${DB_USER}";
 
- -- =============================
--- v2ray_clients table + indexes ( актуальная схема )
--- =============================
+-- Set default privileges for future objects
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "${DB_USER}";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "${DB_USER}";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO "${DB_USER}";
+SQL
 
+echo "[*] Creating schema objects..."
+
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d "${DB_NAME}" <<SQL
 CREATE TABLE IF NOT EXISTS public.v2ray_clients
 (
     id                bigserial PRIMARY KEY,
@@ -376,7 +387,7 @@ CREATE TABLE IF NOT EXISTS public.v2ray_clients
 );
 
 -- owner (если хочешь держать владельца = DB_USER)
-ALTER TABLE public.v2ray_clients OWNER TO $DB_USER;
+ALTER TABLE public.v2ray_clients OWNER TO "${DB_USER}";
 
 -- Индексы / уникальности
 CREATE UNIQUE INDEX IF NOT EXISTS uq_v2ray_clients_active_device_server
@@ -408,7 +419,7 @@ CREATE INDEX IF NOT EXISTS idx_v2ray_clients_cleanup_failed_at
 CREATE INDEX IF NOT EXISTS idx_v2ray_clients_expiry_time_active
     ON public.v2ray_clients (expiry_time)
     WHERE (revoked_at IS NULL);
-EOF
+SQL
 
 echo "База пересоздана, таблица v2ray_clients и индексы созданы."
 
@@ -442,15 +453,26 @@ echo "WEBPATH=$WEBPATH"
 
 echo "EXIT: $?"
 
-/usr/local/x-ui/x-ui migrate >>"$LOG_FILE" 2>&1
+echo "[*] Running x-ui migrate..."
+/usr/local/x-ui/x-ui migrate >>"$LOG_FILE" 2>&1 || { echo "[!] x-ui migrate failed" >&3; exit 1; }
 
+echo "[*] Waiting for public.inbounds..."
+for i in {1..30}; do
+  if sudo -u postgres psql -d "$DB_NAME" -tAc "select to_regclass('public.inbounds')" | grep -q inbounds; then
+    break
+  fi
+  sleep 1
+done
+sudo -u postgres psql -d "$DB_NAME" -tAc "select to_regclass('public.inbounds')" | grep -q inbounds \
+  || { echo "[!] table public.inbounds not found after migrate" >&3; exit 1; }
+  
 # -----------------------------
 # 5️⃣ Изменяем тип полей с text на jsonb после миграции
 # -----------------------------
 echo "Изменяем тип полей settings и stream_settings с text на jsonb..."
 
 # Подключаемся к базе и изменяем типы полей
-sudo -u postgres psql -d $DB_NAME <<EOF
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$DB_NAME" <<SQL
 -- Изменяем тип поля settings с text на jsonb
 ALTER TABLE inbounds 
 ALTER COLUMN settings TYPE jsonb 
