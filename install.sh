@@ -472,36 +472,46 @@ sudo -u postgres psql -d "$DB_NAME" -tAc "select to_regclass('public.inbounds')"
 echo "Изменяем тип полей settings и stream_settings с text на jsonb..."
 
 # Подключаемся к базе и изменяем типы полей
-sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$DB_NAME" <<SQL
--- 0) helper: safe text->jsonb
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$DB_NAME" <<'SQL'
+SET lock_timeout = '5s';
+SET statement_timeout = '5min';
+
 CREATE OR REPLACE FUNCTION public.try_jsonb(t text)
 RETURNS jsonb
 LANGUAGE plpgsql
 IMMUTABLE
-AS \$\$
+AS $$
 BEGIN
   RETURN t::jsonb;
 EXCEPTION WHEN others THEN
   RETURN '{}'::jsonb;
 END;
-\$\$;
+$$;
 
--- 1) settings -> jsonb (safe)
-ALTER TABLE public.inbounds
-  ALTER COLUMN settings TYPE jsonb
-  USING public.try_jsonb(NULLIF(btrim(settings), ''));
+DO $$
+DECLARE
+  col text;
+  typ text;
+BEGIN
+  FOREACH col IN ARRAY ARRAY['settings','stream_settings','sniffing'] LOOP
+    SELECT data_type INTO typ
+    FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='inbounds' AND column_name=col;
 
--- 2) stream_settings -> jsonb (safe)
-ALTER TABLE public.inbounds
-  ALTER COLUMN stream_settings TYPE jsonb
-  USING public.try_jsonb(NULLIF(btrim(stream_settings), ''));
+    RAISE NOTICE 'inbounds.% type=%', col, typ;
 
--- 3) sniffing -> jsonb (safe)
-ALTER TABLE public.inbounds
-  ALTER COLUMN sniffing TYPE jsonb
-  USING public.try_jsonb(NULLIF(btrim(sniffing), ''));
+    IF typ = 'text' THEN
+      EXECUTE format(
+        'ALTER TABLE public.inbounds ALTER COLUMN %I TYPE jsonb USING public.try_jsonb(NULLIF(btrim(%I), ''''))',
+        col, col
+      );
+      RAISE NOTICE 'inbounds.% converted to jsonb', col;
+    ELSE
+      RAISE NOTICE 'inbounds.% skip', col;
+    END IF;
+  END LOOP;
+END $$;
 
--- индексы
 CREATE INDEX IF NOT EXISTS idx_inbounds_settings_clients
   ON public.inbounds USING gin ((settings->'clients'));
 
@@ -512,11 +522,18 @@ CREATE INDEX IF NOT EXISTS idx_inbounds_stream_settings_security
 CREATE INDEX IF NOT EXISTS idx_inbounds_protocol
   ON public.inbounds(protocol);
 
--- проверка
+ANALYZE public.inbounds;
+
 SELECT column_name, data_type
 FROM information_schema.columns
-WHERE table_name = 'inbounds'
-  AND column_name IN ('settings','stream_settings','sniffing');
+WHERE table_schema='public' AND table_name='inbounds'
+  AND column_name IN ('settings','stream_settings','sniffing')
+ORDER BY column_name;
+
+SELECT indexname
+FROM pg_indexes
+WHERE schemaname='public' AND tablename='inbounds'
+ORDER BY indexname;
 SQL
 
 echo "Миграция и оптимизация базы данных завершены"
